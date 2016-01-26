@@ -1,25 +1,20 @@
 module LazyMode
-  def self.create_file(file_name, &block)
-    File.new(file_name, &block)
-  end
-
   class Date
     include Comparable
 
     attr_reader :year, :month, :day
 
     def initialize(date)
-      @year = date[0..3].to_i
-      @month = date[5..6].to_i
-      @day = date[8..9].to_i
+      @year, @month, @day = date.split('-').map(&:to_i)
     end
 
     def <=>(other)
-      days_since_beginning_of_time <=> other.days_since_beginning_of_time
+      number_of_days_since_beginning_of_time <=>
+        other.number_of_days_since_beginning_of_time
     end
 
     def +(number_of_days)
-      day_number = days_since_beginning_of_time + number_of_days
+      day_number = number_of_days_since_beginning_of_time + number_of_days
 
       new_year = day_number / 360 + 1
       new_month = (day_number % 360) / 30 + 1
@@ -33,7 +28,7 @@ module LazyMode
       "%04d-%02d-%02d" % [year, month, day]
     end
 
-    def days_since_beginning_of_time
+    def number_of_days_since_beginning_of_time
       (year - 1) * 360 + (month - 1) * 30 + day
     end
   end
@@ -47,7 +42,9 @@ module LazyMode
 
     def self.create(header, file_name, tags, &block)
       note = new(header, file_name, tags)
+
       DSL.new(note).instance_eval(&block)
+
       note
     end
 
@@ -68,8 +65,8 @@ module LazyMode
       @sub_notes + @sub_notes.map(&:nested_notes).flatten
     end
 
-    def scheduled_for?(*dates)
-      dates.any? { |date| schedule.happening_on_date? date }
+    def scheduled_for?(date)
+      schedule.happening_on_date? date
     end
 
     private
@@ -150,41 +147,12 @@ module LazyMode
   end
 
   class File
-    attr_reader :file_name, :notes
-
-    def initialize(file_name, &block)
-      @file_name = file_name
-      @notes = []
-
-      instance_eval &block
-    end
-
-    def daily_agenda(date)
-      DailyAgenda.new(date, @notes.select { |note| note.scheduled_for? date } )
-    end
-
-    def weekly_agenda(date)
-      week = (0..6).map { |number_of_days| date + number_of_days }
-      week_notes = @notes.select { |note| note.scheduled_for? *week }
-
-      WeeklyAgenda.new(date, week_notes)
-    end
-
-    private
-
-    def note(header, *tags, &block)
-      note = Note.create(header, file_name, tags, &block)
-
-      #Sceptic: Spaces around operators * no spaces around * on line 179 ?!?!
-      @notes += [note, * note.nested_notes]
-    end
-
     class Agenda
-      attr_accessor :notes
-
       class Note < Struct.new(:header, :file_name, :body,
                               :status, :tags, :date)
       end
+
+      attr_accessor :notes
 
       def initialize(notes)
         @notes = notes
@@ -220,32 +188,44 @@ module LazyMode
       end
     end
 
-    class DailyAgenda < Agenda
-      def initialize(date, notes)
-        @date = date
-        @notes = notes.map do |note|
-          Agenda::Note.new(note.header, note.file_name, note.body,
-                           note.status, note.tags, @date)
-        end
-      end
+    attr_reader :name, :notes
+
+    def initialize(name, &block)
+      @name = name
+      @notes = []
+
+      instance_eval &block
     end
 
-    class WeeklyAgenda < Agenda
-      def initialize(date, notes)
-        @date = date
-        @notes = notes.map do |note|
-          Agenda::Note.new(note.header, note.file_name, note.body,
-                           note.status, note.tags, scheduled_for(note))
-        end
+    def daily_agenda(date)
+      daily_notes = @notes.select { |note| note.scheduled_for? date }
+
+      daily_notes.map! do |note|
+        Agenda::Note.new(note.header, note.file_name, note.body,
+                         note.status, note.tags, date)
       end
 
-      private
-
-      def scheduled_for(note)
-        (0..6).map { |days| @date + days }.find do |date|
-          note.scheduled_for? date
-        end
-      end
+      Agenda.new(daily_notes)
     end
+
+    def weekly_agenda(date)
+      week_notes = (0..6).map do |number_of_days|
+        daily_agenda(date + number_of_days).notes
+      end.flatten
+
+      Agenda.new(week_notes)
+    end
+
+    private
+
+    def note(header, *tags, &block)
+      note = Note.create(header, name, tags, &block)
+
+      @notes += [note, * note.nested_notes]
+    end
+  end
+
+  def self.create_file(file_name, &block)
+    File.new(file_name, &block)
   end
 end
